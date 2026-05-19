@@ -1,0 +1,273 @@
+name: CI (shared)
+
+on:
+  workflow_call:
+    inputs:
+      backend-path:
+        type: string
+        default: backend
+        description: Path to Python backend. Empty string skips backend job.
+      frontend-path:
+        type: string
+        default: frontend
+        description: Path to Next.js frontend. Empty string skips frontend job.
+      run-e2e:
+        type: boolean
+        default: false
+        description: Run Playwright e2e-smoke job.
+      python-version:
+        type: string
+        default: "3.12"
+      node-version:
+        type: string
+        default: "22"
+      pytest-args:
+        type: string
+        default: "--tb=short -n 2"
+      playwright-project:
+        type: string
+        default: smoke
+      postgres-image:
+        type: string
+        default: pgvector/pgvector:pg16
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  antipatterns:
+    name: Anti-pattern checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run anti-pattern checks
+        run: |
+          if [ -f scripts/check-antipatterns.sh ]; then
+            bash scripts/check-antipatterns.sh
+          else
+            echo "No anti-pattern script found, skipping."
+          fi
+
+  backend:
+    name: Backend (Python)
+    if: inputs.backend-path != ''
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: ${{ inputs.postgres-image }}
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_pass
+          POSTGRES_DB: app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://test_user:test_pass@localhost:5432/app_test
+      SECRET_KEY: ci-test-secret-key-not-used-in-production
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || 'sk-ant-placeholder-mocked-in-tests' }}
+      ENVIRONMENT: test
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-glob: ${{ inputs.backend-path }}/uv.lock
+
+      - name: Set up Python
+        run: uv python install ${{ inputs.python-version }}
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.backend-path }}
+        run: uv sync --extra dev
+
+      - name: Lint (ruff)
+        working-directory: ${{ inputs.backend-path }}
+        run: uv run ruff check .
+
+      - name: Type check (mypy)
+        working-directory: ${{ inputs.backend-path }}
+        run: uv run mypy app
+
+      - name: Check single alembic head
+        working-directory: ${{ inputs.backend-path }}
+        run: |
+          if [ ! -f alembic.ini ]; then
+            echo "No alembic.ini, skipping head check."
+            exit 0
+          fi
+          HEADS=$(uv run alembic heads 2>/dev/null | grep -c '(head)' || true)
+          echo "alembic head count: $HEADS"
+          if [ "$HEADS" -gt 1 ]; then
+            echo "ERROR: $HEADS alembic heads."
+            uv run alembic heads
+            exit 1
+          fi
+
+      - name: Validate migrations
+        working-directory: ${{ inputs.backend-path }}
+        run: |
+          if [ -f alembic.ini ]; then
+            uv run alembic upgrade head
+          fi
+
+      - name: Run unit tests
+        working-directory: ${{ inputs.backend-path }}
+        run: uv run pytest tests/ ${{ inputs.pytest-args }}
+
+  frontend:
+    name: Frontend (Next.js)
+    if: inputs.frontend-path != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: latest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "pnpm"
+          cache-dependency-path: ${{ inputs.frontend-path }}/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.frontend-path }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        working-directory: ${{ inputs.frontend-path }}
+        run: pnpm type-check
+
+      - name: Lint
+        working-directory: ${{ inputs.frontend-path }}
+        run: pnpm lint
+
+      - name: Unit tests
+        working-directory: ${{ inputs.frontend-path }}
+        run: pnpm test
+
+  e2e-smoke:
+    name: E2E smoke (Playwright)
+    if: inputs.run-e2e
+    runs-on: ubuntu-latest
+    needs: [antipatterns, backend, frontend]
+    services:
+      postgres:
+        image: ${{ inputs.postgres-image }}
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_pass
+          POSTGRES_DB: app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://test_user:test_pass@localhost:5432/app_test
+      SECRET_KEY: ci-test-secret-key-not-used-in-production
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || 'sk-ant-placeholder-mocked-in-tests' }}
+      FRONTEND_URL: http://localhost:3000
+      ENVIRONMENT: test
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-glob: ${{ inputs.backend-path }}/uv.lock
+
+      - name: Set up Python
+        run: uv python install ${{ inputs.python-version }}
+
+      - name: Install backend deps
+        working-directory: ${{ inputs.backend-path }}
+        run: uv sync --extra dev
+
+      - name: Run migrations
+        working-directory: ${{ inputs.backend-path }}
+        run: uv run alembic upgrade head
+
+      - name: Start backend
+        working-directory: ${{ inputs.backend-path }}
+        run: |
+          nohup uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 \
+            > /tmp/uvicorn.log 2>&1 &
+          echo $! > /tmp/uvicorn.pid
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: latest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "pnpm"
+          cache-dependency-path: ${{ inputs.frontend-path }}/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        working-directory: ${{ inputs.frontend-path }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles(format('{0}/pnpm-lock.yaml', inputs.frontend-path)) }}
+
+      - name: Install Playwright browsers
+        working-directory: ${{ inputs.frontend-path }}
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            pnpm exec playwright install-deps chromium
+          else
+            pnpm exec playwright install chromium --with-deps
+          fi
+
+      - name: Build frontend
+        working-directory: ${{ inputs.frontend-path }}
+        run: pnpm build
+
+      - name: Start frontend
+        working-directory: ${{ inputs.frontend-path }}
+        run: pnpm start &
+
+      - name: Wait for services
+        run: |
+          npx wait-on http-get://localhost:8000/health http-get://localhost:3000 --timeout 60000 \
+            || { echo "=== Backend log ==="; cat /tmp/uvicorn.log; exit 1; }
+
+      - name: Run Playwright
+        working-directory: ${{ inputs.frontend-path }}
+        run: pnpm exec playwright test --project=${{ inputs.playwright-project }}
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: ${{ inputs.frontend-path }}/playwright-report/
+          retention-days: 7
