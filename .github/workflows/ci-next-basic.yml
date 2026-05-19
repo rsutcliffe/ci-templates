@@ -1,0 +1,212 @@
+name: CI Next Basic (shared)
+
+# Generic Next.js / Node CI for repos in this account. Caller supplies
+# package manager, node version, and commands. Optional Playwright job
+# runs only when `run-playwright: true`.
+
+on:
+  workflow_call:
+    inputs:
+      package-manager:
+        type: string
+        default: npm
+        description: "npm or pnpm"
+      node-version:
+        type: string
+        default: "22"
+      working-directory:
+        type: string
+        default: "."
+        description: "Path to the package.json (root by default)"
+      install-command:
+        type: string
+        default: ""
+        description: "Override install command. Defaults to 'npm ci' or 'pnpm install --frozen-lockfile'."
+      type-check-command:
+        type: string
+        default: ""
+        description: "Skip type check if empty. Common: 'npx tsc --noEmit' or 'npm run type-check'."
+      lint-command:
+        type: string
+        default: ""
+        description: "Skip lint if empty. Common: 'npm run lint'."
+      test-command:
+        type: string
+        default: ""
+        description: "Skip unit tests if empty. Common: 'npm test' or 'npm run test:unit'."
+      run-playwright:
+        type: boolean
+        default: false
+      playwright-install-command:
+        type: string
+        default: ""
+        description: "Override playwright browser install. Defaults to npx/pnpm exec install chromium --with-deps."
+      playwright-command:
+        type: string
+        default: ""
+        description: "Playwright test command. Required if run-playwright is true."
+      pre-test-command:
+        type: string
+        default: ""
+        description: "Optional command run after install before tests (e.g. seed .env)."
+      env-vars:
+        type: string
+        default: ""
+        description: "Multi-line KEY=VALUE pairs written to GITHUB_ENV before steps run."
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      NEXT_PUBLIC_SUPABASE_URL:
+        required: false
+      NEXT_PUBLIC_SUPABASE_ANON_KEY:
+        required: false
+      SUPABASE_SERVICE_ROLE_KEY:
+        required: false
+
+jobs:
+  build-and-test:
+    name: Lint, Type-check, Test
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Export env-vars input
+        if: inputs.env-vars != ''
+        run: printf '%s\n' "${{ inputs.env-vars }}" >> "$GITHUB_ENV"
+
+      - name: Install pnpm
+        if: inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v6
+        with:
+          version: latest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          cache-dependency-path: |
+            ${{ inputs.working-directory }}/package-lock.json
+            ${{ inputs.working-directory }}/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -n "${{ inputs.install-command }}" ]; then
+            ${{ inputs.install-command }}
+          elif [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+            pnpm install --frozen-lockfile
+          else
+            npm ci
+          fi
+
+      - name: Pre-test command
+        if: inputs.pre-test-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.pre-test-command }}
+
+      - name: Type check
+        if: inputs.type-check-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.type-check-command }}
+
+      - name: Lint
+        if: inputs.lint-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.lint-command }}
+
+      - name: Unit tests
+        if: inputs.test-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.test-command }}
+
+  playwright:
+    name: Playwright
+    if: inputs.run-playwright
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Export env-vars input
+        if: inputs.env-vars != ''
+        run: printf '%s\n' "${{ inputs.env-vars }}" >> "$GITHUB_ENV"
+
+      - name: Install pnpm
+        if: inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v6
+        with:
+          version: latest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          cache-dependency-path: |
+            ${{ inputs.working-directory }}/package-lock.json
+            ${{ inputs.working-directory }}/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -n "${{ inputs.install-command }}" ]; then
+            ${{ inputs.install-command }}
+          elif [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+            pnpm install --frozen-lockfile
+          else
+            npm ci
+          fi
+
+      - name: Pre-test command
+        if: inputs.pre-test-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.pre-test-command }}
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles(format('{0}/package-lock.json', inputs.working-directory), format('{0}/pnpm-lock.yaml', inputs.working-directory)) }}
+
+      - name: Install Playwright browsers
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -n "${{ inputs.playwright-install-command }}" ]; then
+            ${{ inputs.playwright-install-command }}
+          elif [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+              pnpm exec playwright install-deps chromium
+            else
+              npx playwright install-deps chromium
+            fi
+          else
+            if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+              pnpm exec playwright install chromium --with-deps
+            else
+              npx playwright install chromium --with-deps
+            fi
+          fi
+
+      - name: Run Playwright
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.playwright-command }}
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: ${{ inputs.working-directory }}/playwright-report/
+          retention-days: 7
