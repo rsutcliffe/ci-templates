@@ -66,6 +66,8 @@ on:
 jobs:
   build-and-test:
     name: Lint, Type-check, Test
+    # Skip on draft PRs — they cost nothing until marked ready for review.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -127,7 +129,7 @@ jobs:
 
   playwright:
     name: Playwright
-    if: inputs.run-playwright
+    if: inputs.run-playwright && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     needs: build-and-test
     env:

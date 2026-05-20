@@ -41,6 +41,8 @@ concurrency:
 jobs:
   antipatterns:
     name: Anti-pattern checks
+    # Skip on draft PRs — they cost nothing until marked ready for review.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -54,7 +56,7 @@ jobs:
 
   backend:
     name: Backend (Python)
-    if: inputs.backend-path != ''
+    if: inputs.backend-path != '' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -128,7 +130,7 @@ jobs:
 
   frontend:
     name: Frontend (Next.js)
-    if: inputs.frontend-path != ''
+    if: inputs.frontend-path != '' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -163,7 +165,7 @@ jobs:
 
   e2e-smoke:
     name: E2E smoke (Playwright)
-    if: inputs.run-e2e
+    if: inputs.run-e2e && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     needs: [antipatterns, backend, frontend]
     services:
