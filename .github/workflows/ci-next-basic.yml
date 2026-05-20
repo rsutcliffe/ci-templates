@@ -99,8 +99,9 @@ jobs:
       - name: Install dependencies
         working-directory: ${{ inputs.working-directory }}
         run: |
-          if [ -n "${{ inputs.install-command }}" ]; then
-            ${{ inputs.install-command }}
+          INSTALL_CMD="${{ inputs.install-command }}"
+          if [ -n "$INSTALL_CMD" ]; then
+            eval "$INSTALL_CMD"
           elif [ "${{ inputs.package-manager }}" = "pnpm" ]; then
             pnpm install --frozen-lockfile
           else
@@ -162,8 +163,9 @@ jobs:
       - name: Install dependencies
         working-directory: ${{ inputs.working-directory }}
         run: |
-          if [ -n "${{ inputs.install-command }}" ]; then
-            ${{ inputs.install-command }}
+          INSTALL_CMD="${{ inputs.install-command }}"
+          if [ -n "$INSTALL_CMD" ]; then
+            eval "$INSTALL_CMD"
           elif [ "${{ inputs.package-manager }}" = "pnpm" ]; then
             pnpm install --frozen-lockfile
           else
@@ -185,8 +187,9 @@ jobs:
       - name: Install Playwright browsers
         working-directory: ${{ inputs.working-directory }}
         run: |
-          if [ -n "${{ inputs.playwright-install-command }}" ]; then
-            ${{ inputs.playwright-install-command }}
+          PW_INSTALL_CMD="${{ inputs.playwright-install-command }}"
+          if [ -n "$PW_INSTALL_CMD" ]; then
+            eval "$PW_INSTALL_CMD"
           elif [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
             if [ "${{ inputs.package-manager }}" = "pnpm" ]; then
               pnpm exec playwright install-deps chromium
