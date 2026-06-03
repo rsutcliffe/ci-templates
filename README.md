@@ -9,11 +9,86 @@ inherits it on its own schedule.
 
 | Workflow | For | Caller pins |
 |---|---|---|
-| `ci-shared.yml` | Python backend + Next.js frontend (e.g. hoci/ScoreView) | `@v3` |
-| `ci-next-basic.yml` | Generic Node / Next.js (npm or pnpm), optional Playwright | `@v3` |
+| `ci-shared.yml` | Python backend + Next.js frontend (e.g. hoci/ScoreView) | `@v6` |
+| `ci-next-basic.yml` | Generic Node / Next.js (npm or pnpm), optional Playwright | `@v6` |
+| `ci-status.yml` | Aggregator — single required check that treats path-skips as pass | `@v6` |
 
-Pin callers to a **tag** (`@v3`), never `@main` — template changes then
+## Composite actions
+
+| Action | Purpose | Caller pins |
+|---|---|---|
+| `actions/path-gate` | Runs `dorny/paths-filter` and exposes a `changes` JSON output so downstream jobs can `if:` themselves out on partial PRs | `@v6` |
+
+Pin callers to a **tag** (`@v6`), never `@main` — template changes then
 propagate only when a repo deliberately bumps its pin.
+
+### Path-gated CI — full caller example
+
+The cost-saving pattern: filter paths once, gate every heavy job on whether
+its area changed, aggregate a single status for branch protection.
+
+```yaml
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore: ['docs/**', '**/*.md', '.claude/**']
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', '**/*.md', '.claude/**']
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      changes: ${{ steps.gate.outputs.changes }}
+    steps:
+      - id: gate
+        uses: rsutcliffe/ci-templates/.github/actions/path-gate@v6
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'pyproject.toml'
+            frontend:
+              - 'frontend/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+            scripts:
+              - 'scripts/**'
+
+  backend:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.changes), 'backend')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # ...
+
+  frontend:
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.changes), 'frontend')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # ...
+
+  ci-status:
+    needs: [changes, backend, frontend]
+    if: always()
+    uses: rsutcliffe/ci-templates/.github/workflows/ci-status.yml@v6
+    with:
+      results: ${{ toJSON(needs) }}
+```
+
+**Branch protection:** require only `ci-status / status`. It treats `skipped`
+as pass, so path-gated jobs that legitimately skip don't block the PR.
 
 ### Caller example — `ci-next-basic.yml`
 
@@ -34,7 +109,7 @@ concurrency:
 
 jobs:
   ci:
-    uses: rsutcliffe/ci-templates/.github/workflows/ci-next-basic.yml@v3
+    uses: rsutcliffe/ci-templates/.github/workflows/ci-next-basic.yml@v6
     with:
       package-manager: npm
       node-version: "22"
@@ -45,6 +120,14 @@ jobs:
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
+
+## What v6 adds (over v5)
+
+- `path-gate` composite action — wraps `dorny/paths-filter` for path-gated jobs.
+- `ci-status.yml` reusable aggregator — single required check, skip-tolerant.
+- `timeout-minutes` on every job in `ci-shared.yml` / `ci-next-basic.yml`
+  (default 360 = 6h would burn ~$2.88 per stuck run).
+- Artifact `retention-days: 1` (was 7) — 7× storage saving on Playwright reports.
 
 ## Cost-control policy
 
@@ -122,4 +205,4 @@ spike blows the cap.
 
 ## Maintenance
 
-Bump the template tag quarterly. Repos re-pin (`@v3` → `@v4`) when convenient.
+Bump the template tag on breaking changes. Repos re-pin (`@v5` → `@v6`) when convenient.

@@ -1,0 +1,34 @@
+name: Path gate
+description: >-
+  Run dorny/paths-filter and expose change-area outputs so downstream jobs
+  can `if:` themselves out when their area didn't change. Reduces billed
+  minutes on partial PRs (frontend-only, backend-only, scripts-only, etc.).
+
+inputs:
+  filters:
+    description: >-
+      Multi-line YAML passed verbatim to dorny/paths-filter `filters` input.
+      One key per change-area you want to gate on.
+    required: true
+  checkout:
+    description: >-
+      Run actions/checkout before paths-filter. Set to 'false' if the caller
+      already checked out (saves ~3s).
+    required: false
+    default: "true"
+
+outputs:
+  changes:
+    description: JSON array of filter keys that matched. Use with fromJSON for matrix builds.
+    value: ${{ steps.filter.outputs.changes }}
+
+runs:
+  using: composite
+  steps:
+    - if: inputs.checkout == 'true'
+      uses: actions/checkout@v6
+
+    - id: filter
+      uses: dorny/paths-filter@v4
+      with:
+        filters: ${{ inputs.filters }}
