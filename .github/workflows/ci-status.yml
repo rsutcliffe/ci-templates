@@ -8,10 +8,9 @@ name: CI status (aggregator)
 #   ci-status:
 #     needs: [job-a, job-b, job-c]
 #     if: always()
-#     uses: rsutcliffe/ci-templates/.github/workflows/ci-status.yml@v4
+#     uses: rsutcliffe/ci-templates/.github/workflows/ci-status.yml@v6
 #     with:
-#       results: |
-#         ${{ toJSON(needs) }}
+#       results: toJSON(needs)   # wrapped in expression syntax by caller
 
 on:
   workflow_call:
@@ -20,8 +19,8 @@ on:
         type: string
         required: true
         description: >-
-          JSON object of needs context — pass `${{ toJSON(needs) }}` from caller.
-          Each key's `.result` is inspected.
+          JSON object of needs context — caller passes toJSON(needs).
+          Each key's .result field is inspected.
 
 jobs:
   status:
