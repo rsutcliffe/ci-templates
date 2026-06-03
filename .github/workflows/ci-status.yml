@@ -1,0 +1,50 @@
+name: CI status (aggregator)
+
+# Single conclusive status check for branch protection. Treats `skipped` as
+# pass so path-gated jobs don't block PRs that legitimately skipped them.
+# Fails on failure or cancellation of any input job result.
+#
+# Caller pattern:
+#   ci-status:
+#     needs: [job-a, job-b, job-c]
+#     if: always()
+#     uses: rsutcliffe/ci-templates/.github/workflows/ci-status.yml@v6
+#     with:
+#       results: toJSON(needs)   # wrapped in expression syntax by caller
+
+on:
+  workflow_call:
+    inputs:
+      results:
+        type: string
+        required: true
+        description: >-
+          JSON object of needs context — caller passes toJSON(needs).
+          Each key's .result field is inspected.
+
+jobs:
+  status:
+    name: CI status
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Assert all jobs succeeded or skipped
+        shell: bash
+        env:
+          RESULTS_JSON: ${{ inputs.results }}
+        run: |
+          echo "$RESULTS_JSON" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          bad = []
+          for name, val in data.items():
+              r = (val or {}).get('result', 'unknown')
+              if r not in ('success', 'skipped'):
+                  bad.append(f'{name}: {r}')
+          if bad:
+              print('FAIL — non-pass results:')
+              for line in bad:
+                  print(f'  {line}')
+              sys.exit(1)
+          print(f'All {len(data)} jobs passed or were skipped.')
+          "
