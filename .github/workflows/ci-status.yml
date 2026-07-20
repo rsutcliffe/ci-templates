@@ -21,11 +21,25 @@ on:
         description: >-
           JSON object of needs context — caller passes toJSON(needs).
           Each key's .result field is inspected.
+      runner:
+        type: string
+        required: false
+        default: ubuntu-latest
+        description: >-
+          Runner label for the aggregator job. Defaults to ubuntu-latest so
+          existing callers are unaffected. Repos with their own runner should
+          pass a single unique label (e.g. a self-hosted runner's custom label)
+          — this job is one trivial assertion, but GitHub bills a per-job
+          minimum, so on a private repo it is otherwise a recurring hosted
+          charge on every CI run.
 
 jobs:
   status:
     name: CI status
-    runs-on: ubuntu-latest
+    # Single label, not a JSON array: a `runs-on` fed from an input can only
+    # take an array via fromJSON, which makes the default awkward to express.
+    # A unique custom label targets a self-hosted runner just as precisely.
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 1
     steps:
       - name: Assert all jobs succeeded or skipped
